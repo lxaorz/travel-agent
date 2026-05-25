@@ -1,0 +1,189 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>路线地图 - 南京</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Microsoft YaHei', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        .header h1 {
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
+        .info-bar {
+            display: flex;
+            justify-content: center;
+            gap: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        .info-item {
+            text-align: center;
+        }
+        .info-item .label {
+            color: #666;
+            font-size: 0.9em;
+        }
+        .info-item .value {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #667eea;
+        }
+        .content {
+            display: flex;
+            gap: 20px;
+            padding: 20px;
+        }
+        @media (max-width: 900px) {
+            .content {
+                flex-direction: column;
+            }
+        }
+        #map {
+            flex: 2;
+            height: 500px;
+            border-radius: 10px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        .route-info {
+            flex: 1;
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            overflow-y: auto;
+            max-height: 500px;
+        }
+        .route-info h3 {
+            color: #333;
+            margin-bottom: 15px;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+        .step {
+            padding: 10px;
+            margin-bottom: 8px;
+            background: white;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+        .step:hover {
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        .footer {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+            font-size: 0.9em;
+            background: #f8f9fa;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🗺️ 路线规划</h1>
+            <p>从 <strong>河海大学江宁校区</strong> 到 <strong>南京师范大学仙林校区</strong></p>
+        </div>
+        
+        <div class="info-bar">
+            <div class="info-item">
+                <div class="label">⏱️ 预计时间</div>
+                <div class="value">84 分钟</div>
+            </div>
+            <div class="info-item">
+                <div class="label">📏 距离</div>
+                <div class="value">32 公里</div>
+            </div>
+            <div class="info-item">
+                <div class="label">💰 预计费用</div>
+                <div class="value">约 8 元</div>
+            </div>
+        </div>
+        
+        <div class="content">
+            <div id="map"></div>
+            <div class="route-info">
+                <h3>🚶 路线详情</h3>
+        <div class='step'>1. 步行309米</div>
+        <div class='step'>2. 河海大学·佛城西路站(1口)乘地铁S1号线(南京南站方向)经过2站到南京南站</div>
+        <div class='step'>3. 站厅换乘 步行426米</div>
+        <div class='step'>4. 南京南站乘地铁3号线(林场方向)经过11站到南京林业大学·新庄站(1口)</div>
+        <div class='step'>5. 步行289米</div>
+        <div class='step'>6. 新庄广场东站乘D1路(元化路方向)经过6站到亚东新城区站</div>
+        <div class='step'>7. 步行171米</div>
+
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p>📅 生成时间: 2026-05-25 20:45:24</p>
+            <p>🗺️ 地图数据: OpenStreetMap</p>
+        </div>
+    </div>
+    
+    <script>
+        // 初始化地图
+        var map = L.map('map').setView([32.01147951200994, 118.84783485811835], 11);
+        
+        // 添加地图图层
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors'
+        }).addTo(map);
+        
+        // 添加起点标记
+        var originMarker = L.marker([31.915043662358528, 118.78576137768638]).addTo(map)
+            .bindPopup('<strong>📍 起点</strong><br>河海大学江宁校区')
+            .openPopup();
+        
+        // 添加终点标记
+        var destMarker = L.marker([32.10791536166135, 118.9099083385503]).addTo(map)
+            .bindPopup('<strong>📍 终点</strong><br>南京师范大学仙林校区');
+        
+        // 尝试画一条直线连接起点和终点
+        var line = L.polyline([
+            [31.915043662358528, 118.78576137768638],
+            [32.10791536166135, 118.9099083385503]
+        ], {
+            color: '#667eea',
+            weight: 4,
+            opacity: 0.7,
+            dashArray: '10, 10'
+        }).addTo(map);
+        
+        // 适应地图范围
+        map.fitBounds([
+            [31.915043662358528, 118.78576137768638],
+            [32.10791536166135, 118.9099083385503]
+        ], {padding: [50, 50]});
+    </script>
+</body>
+</html>
