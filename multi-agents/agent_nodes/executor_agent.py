@@ -184,13 +184,18 @@ async def execute_tool(tool_name: str, params: Dict, manager,
                                                 
                                                 if line_name:
                                                     instruction_text = f"乘坐 {line_name} | {instruction}"
+                                                    # 提取站点信息
+                                                    start_stop = step.get("start_location", {}).get("name", "")
+                                                    end_stop = step.get("end_location", {}).get("name", "")
                                                     route_details.append({
                                                         "type": "transit",
                                                         "line": line_name,
                                                         "instruction": instruction,
                                                         "distance": step_distance,
                                                         "duration": step_duration,
-                                                        "path": points
+                                                        "path": points,
+                                                        "start_stop": start_stop,
+                                                        "end_stop": end_stop
                                                     })
                                                 else:
                                                     instruction_text = instruction
@@ -255,6 +260,34 @@ async def execute_tool(tool_name: str, params: Dict, manager,
                                         path_js += "\n"
                                     path_js += "    ]"
                                     print(f"🔍 [地图调试] path_js 行数: {len(path_js.splitlines())}")
+                                    
+                                    # 生成中转节点的JavaScript代码
+                                    transfer_nodes_js = ""
+                                    if route_details and len(route_details) > 0:
+                                        for i, detail in enumerate(route_details):
+                                            if detail.get("type") == "transit" and detail.get("path") and len(detail["path"]) > 0:
+                                                # 取该段路线的中间点作为站点位置
+                                                path_points = detail["path"]
+                                                mid_idx = len(path_points) // 2
+                                                point = path_points[mid_idx]
+                                                wgs_point = bd09_to_wgs84(point[0], point[1])
+                                                line_name = detail.get("line", "")
+                                                start_stop = detail.get("start_stop", "")
+                                                end_stop = detail.get("end_stop", "")
+                                                
+                                                transfer_nodes_js += f"""
+            L.marker([{wgs_point[1]}, {wgs_point[0]}], {{
+                icon: L.divIcon({{
+                    className: 'transfer-marker',
+                    html: '<div style=\"background:#ff9800;color:white;width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:bold;box-shadow:0 2px 8px rgba(0,0,0,0.3);font-size:11px;\">{line_name[:4]}</div>',
+                    iconSize: [32, 32],
+                    iconAnchor: [16, 16]
+                }})
+            }}).addTo(map).bindPopup('<strong>🚇 {line_name}</strong><br>起点: {start_stop}<br>终点: {end_stop}');
+                                                """
+                                        print(f"🔍 [地图调试] 生成了 {len([d for d in route_details if d.get('type') == 'transit'])} 个中转节点")
+                                    else:
+                                        transfer_nodes_js = "// 无中转节点"
                                     
                                     # 生成路线详情HTML
                                     route_html = ""
@@ -354,20 +387,8 @@ async def execute_tool(tool_name: str, params: Dict, manager,
                 }})
             }}).addTo(map).bindPopup('<strong>📍 终点</strong><br>{{destination_name}}');
             
-            if (pathPoints && pathPoints.length > 0) {{
-                var indices = [0, Math.floor(pathPoints.length/4), Math.floor(pathPoints.length/2), Math.floor(pathPoints.length*3/4), pathPoints.length-1];
-                indices.forEach(function(idx) {{
-                    if (idx > 0 && idx < pathPoints.length - 1) {{
-                        L.circleMarker([pathPoints[idx][0], pathPoints[idx][1]], {{
-                            radius: 6,
-                            fillColor: '#238636',
-                            color: '#fff',
-                            weight: 2,
-                            fillOpacity: 0.8
-                        }}).addTo(map);
-                    }}
-                }});
-            }}
+            // 添加中转节点标记
+            {transfer_nodes_js}
             
             L.control.scale().addTo(map);
         }});
