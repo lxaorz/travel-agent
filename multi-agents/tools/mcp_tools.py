@@ -228,17 +228,9 @@ class MCPToolManager:
         if self.exit_stack:
             try:
                 await self.exit_stack.aclose()
-            except (RuntimeError, GeneratorExit, BaseExceptionGroup) as e:
-                # 静默asyncio相关的清理错误（不影响功能）
-                error_str = str(e)
-                if any(keyword in error_str.lower() for keyword in [
-                    'async_generator', 'generator didn\'t stop',
-                    'taskgroup', 'cancel scope', 'sse_client'
-                ]):
-                    pass
-                else:
-                    # 如果是其他类型的错误，仍然抛出
-                    raise
+            except Exception as e:
+                # 静默所有清理错误（不影响功能）
+                pass
 
 
 # 全局MCP管理器实例

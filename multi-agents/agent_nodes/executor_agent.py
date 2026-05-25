@@ -8,6 +8,9 @@ from typing import Dict, Any, List
 import json
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
+import folium
+from streamlit.components.v1 import html as st_html
+from folium import plugins
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 from config.settings import (
@@ -18,6 +21,19 @@ from config.prompts import REACT_THOUGHT_PROMPT
 from graph.state import GlobalState
 from tools.rag_tool import query_travel_knowledge
 from tools.tool_registry import get_tools_description_for_llm
+
+def bd09_to_wgs84(lng, lat):
+    """BD09坐标转换为WGS84坐标"""
+    import math
+    x = lng - 0.0065
+    y = lat - 0.006
+    z = math.sqrt(x*x + y*y) - 0.00002 * math.sin(y * math.pi)
+    theta = math.atan2(y, x) - 0.000003 * math.cos(x * math.pi)
+    wgs_lng = z * math.cos(theta)
+    wgs_lat = z * math.sin(theta)
+    return (wgs_lng, wgs_lat)
+
+
 
 
 async def execute_tool(tool_name: str, params: Dict, manager, 
@@ -89,6 +105,8 @@ async def execute_tool(tool_name: str, params: Dict, manager,
             origin = params.get("origin", "")
             destination = params.get("destination", "")
             city = params.get("city", "")
+            origin_name = params.get("origin_name", "起点")
+            destination_name = params.get("destination_name", "终点")
             
             if not origin or not destination:
                 return "公共交通路线查询失败: origin或destination参数为空"
@@ -96,6 +114,23 @@ async def execute_tool(tool_name: str, params: Dict, manager,
             from config.settings import BAIDU_AK, BAIDU_TRANSIT_URL
             if BAIDU_AK and BAIDU_AK != "your_baidu_api_key_here":
                 import requests
+                
+                # 解析路径的辅助函数
+                def parse_path(path_str):
+                    points = []
+                    if not path_str:
+                        return points
+                    pairs = path_str.split(';')
+                    for pair in pairs:
+                        if pair:
+                            coords = pair.split(',')
+                            if len(coords) == 2:
+                                try:
+                                    points.append((float(coords[0]), float(coords[1])))
+                                except:
+                                    pass
+                    return points
+                
                 try:
                     api_params = {
                         "origin": origin,
@@ -122,35 +157,232 @@ async def execute_tool(tool_name: str, params: Dict, manager,
                             output += f"距离：{distance}公里\n"
                             output += f"预计费用：{price}元\n\n"
                             
+                            # 提取路径节点和路线详情（与 generate_detailed_route.py 一致）
+                            all_path_points = []  # 收集所有路径点
+                            route_details = []
+                            total_steps = 0
+                            
                             steps = route.get("steps", [])
                             if steps:
                                 output += "路线详情：\n"
-                                step_count = 0
                                 for leg in steps:
                                     if isinstance(leg, list):
                                         for step in leg:
-                                            if step_count >= 10:
-                                                break
                                             if isinstance(step, dict):
-                                                # 修复：字段名是 instructions 不是 instruction
+                                                # 提取路径点
+                                                path = step.get("path", "")
+                                                if path:
+                                                    points = parse_path(path)
+                                                    all_path_points.extend(points)
+                                                
+                                                # 提取步骤信息
                                                 instruction = step.get("instructions", "")
                                                 vehicle_info = step.get("vehicle_info", {})
                                                 line_name = vehicle_info.get("line_name", "")
+                                                step_distance = step.get("distance", 0)
+                                                step_duration = step.get("duration", 0) // 60
                                                 
                                                 if line_name:
-                                                    instruction = f"乘坐 {line_name} | {instruction}"
+                                                    instruction_text = f"乘坐 {line_name} | {instruction}"
+                                                    route_details.append({
+                                                        "type": "transit",
+                                                        "line": line_name,
+                                                        "instruction": instruction,
+                                                        "distance": step_distance,
+                                                        "duration": step_duration,
+                                                        "path": points
+                                                    })
+                                                else:
+                                                    instruction_text = instruction
+                                                    route_details.append({
+                                                        "type": "walk",
+                                                        "instruction": instruction,
+                                                        "distance": step_distance,
+                                                        "duration": step_duration,
+                                                        "path": points
+                                                    })
                                                 
                                                 if instruction:
-                                                    output += f"{step_count + 1}. {instruction}\n"
-                                                    step_count += 1
-                                    if step_count >= 10:
-                                        output += "... 省略后续步骤\n"
-                                        break
+                                                    output += f"{total_steps + 1}. {instruction_text}\n"
+                                                    total_steps += 1
                                 
-                                if step_count == 0:
+                                if total_steps == 0:
                                     output += "⚠️ 未找到路线步骤信息\n"
                             
                             print(f"✅ [gaode_transit] 成功: 找到{len(routes)}条路线, 推荐路线{duration}分钟, {distance}公里")
+                            print(f"📍 提取到 {len(all_path_points)} 个路径节点")
+                            print(f"📝 共 {total_steps} 个步骤")
+                            
+                            # 生成地图HTML（使用收集到的所有路径点）
+                            try:
+                                origin_coords = origin.split(',')
+                                dest_coords = destination.split(',')
+                                print(f"🔍 [地图调试] origin: {origin}, dest: {destination}")
+                                print(f"🔍 [地图调试] all_path_points 数量: {len(all_path_points)}")
+                                print(f"🔍 [地图调试] route_details 数量: {len(route_details) if route_details else 0}")
+                                
+                                if len(origin_coords) == 2 and len(dest_coords) == 2:
+                                    origin_lat = float(origin_coords[0])
+                                    origin_lng = float(origin_coords[1])
+                                    dest_lat = float(dest_coords[0])
+                                    dest_lng = float(dest_coords[1])
+                                    
+                                    # 坐标转换：BD09 -> WGS84
+                                    origin_wgs = bd09_to_wgs84(origin_lng, origin_lat)
+                                    dest_wgs = bd09_to_wgs84(dest_lng, dest_lat)
+                                    
+                                    # 转换所有路径点
+                                    path_points_wgs = [bd09_to_wgs84(p[0], p[1]) for p in all_path_points]
+                                    print(f"🔍 [地图调试] path_points_wgs 数量: {len(path_points_wgs)}")
+                                    
+                                    # 计算地图中心点
+                                    if path_points_wgs:
+                                        lats = [p[1] for p in path_points_wgs]
+                                        lngs = [p[0] for p in path_points_wgs]
+                                        center_lng = (min(lngs) + max(lngs)) / 2
+                                        center_lat = (min(lats) + max(lats)) / 2
+                                    else:
+                                        center_lng = (origin_wgs[0] + dest_wgs[0]) / 2
+                                        center_lat = (origin_wgs[1] + dest_wgs[1]) / 2
+                                    print(f"🔍 [地图调试] 中心点: lat={center_lat}, lng={center_lng}")
+                                    
+                                    # 生成路径点的 JavaScript 数组（与 generate_detailed_route.py 完全一致）
+                                    path_js = "[\n"
+                                    for i, point in enumerate(path_points_wgs):
+                                        path_js += f"        [{point[1]}, {point[0]}]"
+                                        if i < len(path_points_wgs) - 1:
+                                            path_js += ","
+                                        path_js += "\n"
+                                    path_js += "    ]"
+                                    print(f"🔍 [地图调试] path_js 行数: {len(path_js.splitlines())}")
+                                    
+                                    # 生成路线详情HTML
+                                    route_html = ""
+                                    for i, detail in enumerate(route_details):
+                                        icon = "🚶" if detail["type"] == "walk" else "🚇" if "地铁" in detail.get("line", "") else "🚌"
+                                        line_info = f"【{detail['line']}】" if detail.get("line") else ""
+                                        
+                                        route_html += f"""
+                                        <div class="step">
+                                            <div class="step-icon">{icon}</div>
+                                            <div class="step-content">
+                                                <div class="step-number">{i + 1}</div>
+                                                <div class="step-info">
+                                                    <div class="step-line">{line_info}</div>
+                                                    <div class="step-desc">{detail['instruction']}</div>
+                                                    <div class="step-meta">
+                                                        <span>📍 {detail['distance']}米</span>
+                                                        <span>⏱️ {detail['duration']}分钟</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        """
+                                    
+                                    # 完整复制 generate_detailed_route.py 的地图 HTML
+                                    map_html = f"""
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>路线地图</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{ font-family: 'Microsoft YaHei', Arial, sans-serif; background: #f5f7fa; }}
+        .map-container {{ position: relative; width: 100%; height: 500px; background: white; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); overflow: hidden; }}
+        #route-map {{ height: 100%; width: 100%; }}
+        .legend {{
+            position: absolute; bottom: 20px; left: 20px;
+            background: rgba(255,255,255,0.95); padding: 12px 16px;
+            border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            font-size: 0.85em; z-index: 1000;
+        }}
+        .legend-item {{ display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }}
+        .legend-color {{ width: 20px; height: 4px; border-radius: 2px; }}
+    </style>
+</head>
+<body>
+    <div class="map-container">
+        <div id="route-map"></div>
+        <div class="legend">
+            <div class="legend-item"><div class="legend-color" style="background:#238636;"></div><span>地铁/公交路线</span></div>
+            <div class="legend-item"><div class="legend-color" style="background:#1f77b4;"></div><span>步行路段</span></div>
+            <div class="legend-item"><div class="legend-color" style="background:#ff6b6b;border-radius:50%;height:8px;width:8px;"></div><span>起点</span></div>
+            <div class="legend-item"><div class="legend-color" style="background:#4ecdc4;border-radius:50%;height:8px;width:8px;"></div><span>终点</span></div>
+        </div>
+    </div>
+    
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {{
+            var map = L.map('route-map').setView([{center_lat}, {center_lng}], 11);
+            
+            L.tileLayer('https://webrd0{{s}}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={{x}}&y={{y}}&z={{z}}', {{
+                attribution: '© 高德地图',
+                subdomains: ['1', '2', '3', '4']
+            }}).addTo(map);
+            
+            var pathPoints = {path_js};
+            if (pathPoints && pathPoints.length > 0) {{
+                var routeLine = L.polyline(pathPoints, {{
+                    color: '#238636',
+                    weight: 5,
+                    opacity: 0.8,
+                    smoothFactor: 3
+                }}).addTo(map);
+                
+                map.fitBounds(routeLine.getBounds(), {{padding: [60, 60]}});
+            }}
+            
+            L.marker([{origin_wgs[1]}, {origin_wgs[0]}], {{
+                icon: L.divIcon({{
+                    className: 'custom-marker',
+                    html: '<div style=\"background:#ff6b6b;color:white;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:bold;box-shadow:0 2px 8px rgba(0,0,0,0.2);font-size:12px;\">起</div>',
+                    iconSize: [28, 28],
+                    iconAnchor: [14, 14]
+                }})
+            }}).addTo(map).bindPopup('<strong>📍 起点</strong><br>{origin_name}').openPopup();
+            
+            L.marker([{dest_wgs[1]}, {dest_wgs[0]}], {{
+                icon: L.divIcon({{
+                    className: 'custom-marker',
+                    html: '<div style=\"background:#4ecdc4;color:white;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:bold;box-shadow:0 2px 8px rgba(0,0,0,0.2);font-size:12px;\">终</div>',
+                    iconSize: [28, 28],
+                    iconAnchor: [14, 14]
+                }})
+            }}).addTo(map).bindPopup('<strong>📍 终点</strong><br>{{destination_name}}');
+            
+            if (pathPoints && pathPoints.length > 0) {{
+                var indices = [0, Math.floor(pathPoints.length/4), Math.floor(pathPoints.length/2), Math.floor(pathPoints.length*3/4), pathPoints.length-1];
+                indices.forEach(function(idx) {{
+                    if (idx > 0 && idx < pathPoints.length - 1) {{
+                        L.circleMarker([pathPoints[idx][0], pathPoints[idx][1]], {{
+                            radius: 6,
+                            fillColor: '#238636',
+                            color: '#fff',
+                            weight: 2,
+                            fillOpacity: 0.8
+                        }}).addTo(map);
+                    }}
+                }});
+            }}
+            
+            L.control.scale().addTo(map);
+        }});
+    </script>
+</body>
+</html>
+                                    """
+                                    
+                                    print(f"🔍 [地图调试] 直接生成 map_html 长度: {len(map_html)}")
+                                    output += f"\n\n[MAP_HTML_START]{map_html}[MAP_HTML_END]\n"
+                            except Exception as map_err:
+                                print(f"⚠️ 生成地图失败: {map_err}")
+                                import traceback
+                                traceback.print_exc()
+                            
                             return output
                         else:
                             print(f"⚠️ [gaode_transit] 成功但无路线")

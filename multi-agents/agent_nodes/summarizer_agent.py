@@ -142,11 +142,23 @@ async def summarizer_agent_node(state: GlobalState) -> Dict[str, Any]:
     rag_results = "\n---\n".join(rag_results_history)
     
     tool_results_str = ""
+    map_html_content = None
     for result in tool_results:
         if "error" in result:
             tool_results_str += f"【{result['tool']}】错误: {result['error']}\n"
         else:
-            tool_results_str += f"【{result['tool']}】{result['result']}\n"
+            result_content = result.get('result', '')
+            # 检查是否有地图HTML
+            if '[MAP_HTML_START]' in result_content and '[MAP_HTML_END]' in result_content:
+                start_idx = result_content.index('[MAP_HTML_START]') + len('[MAP_HTML_START]')
+                end_idx = result_content.index('[MAP_HTML_END]')
+                map_html_content = result_content[start_idx:end_idx].strip()
+                # 从显示文本中移除地图HTML标记
+                result_content = result_content[:result_content.index('[MAP_HTML_START]')].strip()
+            tool_results_str += f"【{result['tool']}】{result_content}\n"
+    
+    # 把地图HTML存到上下文中，方便后续提取
+    summarizer_context["map_html"] = map_html_content
     
     # 调试信息：打印工具结果
     print(f"\n🔍 工具执行结果详情:")

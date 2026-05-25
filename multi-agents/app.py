@@ -524,6 +524,23 @@ if user_query := st.chat_input(placeholder="请输入您的旅行需求，例如
                 # 显示回答
                 st.markdown(answer)
                 
+                # 显示地图（如果有）
+                map_html = None
+                if result.get("summarizer_context"):
+                    map_html = result["summarizer_context"].get("map_html")
+                
+                print(f"🔍 [app.py 调试] 是否有 map_html: {'是' if map_html else '否'}")
+                if map_html:
+                    print(f"🔍 [app.py 调试] map_html 长度: {len(map_html)}")
+                
+                if map_html:
+                    try:
+                        st.components.v1.html(map_html, height=450, scrolling=True)
+                        print(f"🔍 [app.py 调试] 地图已显示")
+                    except Exception as map_err:
+                        st.warning(f"地图显示失败: {map_err}")
+                        print(f"🔍 [app.py 调试] 地图显示错误: {map_err}")
+                
             except Exception as e:
                 import traceback
                 traceback.print_exc()
