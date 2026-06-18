@@ -174,13 +174,16 @@ async def execute_tool(tool_name: str, params: Dict, manager,
                                                 if path:
                                                     points = parse_path(path)
                                                     all_path_points.extend(points)
-                                                
+
                                                 # 提取步骤信息
                                                 instruction = step.get("instructions", "")
                                                 vehicle_info = step.get("vehicle_info", {})
                                                 line_name = vehicle_info.get("line_name", "")
                                                 step_distance = step.get("distance", 0)
                                                 step_duration = step.get("duration", 0) // 60
+
+                                                # 调试：打印每个步骤的信息
+                                                print(f"🔍 [分段调试] line_name='{line_name}', path={len(path) if path else 0}点, has_地铁={'地铁' in line_name if line_name else False}")
                                                 
                                                 if line_name:
                                                     instruction_text = f"乘坐 {line_name} | {instruction}"
@@ -251,16 +254,46 @@ async def execute_tool(tool_name: str, params: Dict, manager,
                                         center_lat = (origin_wgs[1] + dest_wgs[1]) / 2
                                     print(f"🔍 [地图调试] 中心点: lat={center_lat}, lng={center_lng}")
                                     
-                                    # 生成路径点的 JavaScript 数组（与 generate_detailed_route.py 完全一致）
-                                    path_js = "[\n"
-                                    for i, point in enumerate(path_points_wgs):
-                                        path_js += f"        [{point[1]}, {point[0]}]"
-                                        if i < len(path_points_wgs) - 1:
-                                            path_js += ","
-                                        path_js += "\n"
-                                    path_js += "    ]"
-                                    print(f"🔍 [地图调试] path_js 行数: {len(path_js.splitlines())}")
-                                    
+                                    # 从 route_details 构建分段着色数据（地铁红/公交橙/步行灰虚线）
+                                    segments_data = []
+                                    for detail in route_details:
+                                        seg_path = detail.get("path", [])
+                                        if not seg_path:
+                                            continue
+                                        wgs_pts = [bd09_to_wgs84(p[0], p[1]) for p in seg_path]
+                                        if detail["type"] == "walk":
+                                            segments_data.append({"type": "walk", "color": "#888888", "dash": "5,10", "points": wgs_pts})
+                                        elif "地铁" in detail.get("line", ""):
+                                            segments_data.append({"type": "subway", "color": "#dc143c", "dash": "", "points": wgs_pts})
+                                        else:
+                                            segments_data.append({"type": "bus", "color": "#ff8c00", "dash": "", "points": wgs_pts})
+
+                                    # 生成路径段的 JavaScript 数组
+                                    segments_js = "[\n"
+                                    for si, seg in enumerate(segments_data):
+                                        if si > 0:
+                                            segments_js += ",\n"
+                                        segments_js += f"    {{type: '{seg['type']}', color: '{seg['color']}', dash: '{seg['dash']}', points: ["
+                                        for pi, point in enumerate(seg["points"]):
+                                            segments_js += f"[{point[1]}, {point[0]}]"
+                                            if pi < len(seg["points"]) - 1:
+                                                segments_js += ","
+                                        segments_js += "]}"
+                                    segments_js += "\n]"
+                                    # 打印分段调试信息到服务器控制台
+                                    seg_summary = [f"{s['type']}({len(s['points'])}点)" for s in segments_data]
+                                    seg_summary_str = ', '.join(seg_summary) if seg_summary else "无分段数据"
+                                    print(f"🔍 [地图调试] segments 数量: {len(segments_data)}: {seg_summary_str}")
+
+                                    # 生成整体路径坐标 JS 数组（作为回退使用）
+                                    path_points_wgs_js = "[\n"
+                                    for pi, point in enumerate(path_points_wgs):
+                                        path_points_wgs_js += f"[{point[1]}, {point[0]}]"
+                                        if pi < len(path_points_wgs) - 1:
+                                            path_points_wgs_js += ","
+                                        path_points_wgs_js += "\n"
+                                    path_points_wgs_js += "]"
+
                                     # 生成中转节点的JavaScript代码
                                     transfer_nodes_js = ""
                                     if route_details and len(route_details) > 0:
@@ -320,6 +353,9 @@ async def execute_tool(tool_name: str, params: Dict, manager,
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>路线地图</title>
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
@@ -341,11 +377,13 @@ async def execute_tool(tool_name: str, params: Dict, manager,
     <div class="map-container">
         <div id="route-map"></div>
         <div class="legend">
-            <div class="legend-item"><div class="legend-color" style="background:#238636;"></div><span>地铁/公交路线</span></div>
-            <div class="legend-item"><div class="legend-color" style="background:#1f77b4;"></div><span>步行路段</span></div>
-            <div class="legend-item"><div class="legend-color" style="background:#ff6b6b;border-radius:50%;height:8px;width:8px;"></div><span>起点</span></div>
-            <div class="legend-item"><div class="legend-color" style="background:#4ecdc4;border-radius:50%;height:8px;width:8px;"></div><span>终点</span></div>
+            <div class="legend-item"><div class="legend-color" style="background:#dc143c;"></div><span>🚇 地铁</span></div>
+            <div class="legend-item"><div class="legend-color" style="background:#ff8c00;"></div><span>🚌 公交/大巴</span></div>
+            <div class="legend-item"><div class="legend-color" style="background:#999999;"></div><span>🚶 步行路段</span></div>
+            <div class="legend-item"><div class="legend-color" style="background:#ff6b6b;border-radius:50%;height:10px;width:10px;"></div><span>起点</span></div>
+            <div class="legend-item"><div class="legend-color" style="background:#4ecdc4;border-radius:50%;height:10px;width:10px;"></div><span>终点</span></div>
         </div>
+        <!-- seg-debug: {seg_summary_str} -->
     </div>
     
     <script>
@@ -357,16 +395,39 @@ async def execute_tool(tool_name: str, params: Dict, manager,
                 subdomains: ['1', '2', '3', '4']
             }}).addTo(map);
             
-            var pathPoints = {path_js};
-            if (pathPoints && pathPoints.length > 0) {{
-                var routeLine = L.polyline(pathPoints, {{
-                    color: '#238636',
-                    weight: 5,
-                    opacity: 0.8,
-                    smoothFactor: 3
-                }}).addTo(map);
-                
-                map.fitBounds(routeLine.getBounds(), {{padding: [60, 60]}});
+            var segments = {segments_js};
+            var allBounds = [];
+            // 调试：打印分段信息到浏览器控制台
+            console.log('路线分段:', segments.map(function(s){{return s.type+'('+s.color+')'+s.points.length+'点'}}).join(', '));
+
+            if (segments.length === 0) {{
+                // 回退：无分段时使用整体路径（原始行为）
+                var pathPoints = [{path_points_wgs_js}];
+                if (pathPoints && pathPoints.length > 0) {{
+                    var fallbackLine = L.polyline(pathPoints, {{
+                        color: '#238636', weight: 5, opacity: 0.7, smoothFactor: 2
+                    }}).addTo(map);
+                    allBounds = pathPoints;
+                }}
+            }} else {{
+                segments.forEach(function(seg) {{
+                    if (seg.points && seg.points.length > 0) {{
+                        var opts = {{
+                            color: seg.color,
+                            weight: 7,
+                            opacity: 0.9,
+                            smoothFactor: 2
+                        }};
+                        if (seg.dash) {{
+                            opts.dashArray = seg.dash;
+                        }}
+                        L.polyline(seg.points, opts).addTo(map);
+                        allBounds = allBounds.concat(seg.points);
+                    }}
+                }});
+            }}
+            if (allBounds.length > 0) {{
+                map.fitBounds(allBounds, {{padding: [60, 60]}});
             }}
             
             L.marker([{origin_wgs[1]}, {origin_wgs[0]}], {{
@@ -752,7 +813,7 @@ async def plan_then_execute(state: GlobalState, planner_context: Dict, executor_
         content = response.content.strip()
         
         print(f"\n📋 R1返回原始内容:")
-        print(content[:500])
+        # print(content[:500])
         
         if "```json" in content:
             start = content.find("```json") + 7

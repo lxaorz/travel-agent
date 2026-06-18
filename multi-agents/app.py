@@ -87,6 +87,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from graph.workflow import travel_graph
 from graph.state import GlobalState
 from chat_history_manager import get_chat_history_manager
+from agent_nodes.summarizer_agent import stream_summarizer_response
+from agent_nodes.main_agent import stream_main_response
 
 def initialize_multi_agents_state() -> GlobalState:
     """初始化Multi-Agents全局状态 - 按新架构"""
@@ -390,6 +392,58 @@ async def run_multi_agents(user_query: str, state: GlobalState = None) -> Global
     
     return result
 
+
+async def run_multi_agents_with_stream(user_query: str, state: GlobalState = None):
+    """
+    运行Multi-Agents旅游规划系统并支持流式输出
+    
+    Args:
+        user_query: 用户查询
+        state: 可选的已有状态（用于多轮对话）
+    
+    Yields:
+        更新状态和增量内容
+    """
+    if state is None:
+        state = initialize_multi_agents_state()
+    
+    state["user_query"] = user_query
+    state["messages"].append(HumanMessage(content=user_query))
+    state["is_complete"] = False
+    state["current_agent"] = None
+    state["next_agent"] = None
+    
+    state["planner_context"] = None
+    state["executor_context"] = None
+    state["summarizer_context"] = None
+    
+    yield {"type": "status", "message": "🤖 Main Agent 正在分析您的查询..."}
+    
+    result = await travel_graph.ainvoke(state)
+    
+    st.session_state.multi_agents_state = result
+    
+    answer = ""
+    
+    if result.get("planner_context") and result["planner_context"].get("needs_clarification", False):
+        answer = result["planner_context"].get("clarification_question", "请提供更多信息")
+        yield {"type": "content", "content": answer}
+    elif result.get("summarizer_context") and result["summarizer_context"].get("final_summary"):
+        yield {"type": "status", "message": "📝 Summarizer Agent 正在生成回答..."}
+        async for chunk in stream_summarizer_response(result):
+            yield {"type": "content", "content": chunk}
+        answer = result["summarizer_context"]["final_summary"]
+    elif result.get("is_complete") and result.get("messages"):
+        last_msg = result["messages"][-1] if result["messages"] else None
+        if last_msg and hasattr(last_msg, 'type') and last_msg.type == 'ai':
+            yield {"type": "status", "message": "💬 正在生成对话回复..."}
+            async for chunk in stream_main_response(result):
+                yield {"type": "content", "content": chunk}
+            answer = last_msg.content
+    
+    yield {"type": "complete", "answer": answer, "state": result}
+
+
 # 显示历史消息
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
@@ -465,6 +519,58 @@ def compress_chat_history(messages, llm=None, max_recent_turns=6, summary_thresh
     
     return compressed
 
+def create_streaming_generator(user_query: str, state: GlobalState, result_container: list):
+    """
+    创建同步生成器，用于Streamlit的st.write_stream
+    
+    Args:
+        user_query: 用户查询
+        state: 全局状态
+        result_container: 用于保存最终结果状态的列表（可变对象）
+    """
+    import asyncio
+    import threading
+    import queue
+    
+    q = queue.Queue()
+    done_flag = [False]
+    
+    async def async_producer():
+        try:
+            async for item in run_multi_agents_with_stream(user_query, state):
+                q.put(("item", item))
+                await asyncio.sleep(0)
+        except Exception as e:
+            q.put(("error", e))
+        finally:
+            done_flag[0] = True
+    
+    def thread_producer():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(async_producer())
+        loop.close()
+    
+    thread = threading.Thread(target=thread_producer)
+    thread.start()
+    
+    while not done_flag[0] or not q.empty():
+        try:
+            item_type, item = q.get(timeout=0.1)
+            if item_type == "error":
+                raise item
+            if item["type"] == "content":
+                yield item["content"]
+            elif item["type"] == "status":
+                print(f"📊 {item['message']}")
+            elif item["type"] == "complete":
+                result_container.append(item.get("state"))
+        except queue.Empty:
+            continue
+    
+    thread.join(timeout=5)
+
+
 # 聊天输入框
 if user_query := st.chat_input(placeholder="请输入您的旅行需求，例如：我想12月去杭州玩3天"):
     # 保存用户消息到数据库
@@ -480,58 +586,34 @@ if user_query := st.chat_input(placeholder="请输入您的旅行需求，例如
         st.markdown(user_query)
     
     with st.chat_message("assistant"):
-        with st.spinner("🤖 Multi-Agents正在协作规划您的旅行..."):
-            try:
-                import asyncio
-                
-                # 运行Multi-Agents系统
-                result = asyncio.run(
-                    run_multi_agents(
-                        user_query, 
-                        st.session_state.multi_agents_state
-                    )
-                )
-                
-                # 更新状态
-                st.session_state.multi_agents_state = result
-                
-                # 显示当前执行的Agent信息
-                current_agent = result.get("current_agent", "unknown")
-                st.info(f"🤖 当前处理Agent: {current_agent}")
-                
-                # 获取回答 - 从新的上下文结构
-                answer = "处理完成，但没有生成回答。"
-                if result.get("planner_context") and result["planner_context"].get("needs_clarification", False):
-                    answer = result["planner_context"].get("clarification_question", "请提供更多信息")
-                elif result.get("summarizer_context") and result["summarizer_context"].get("final_summary"):
-                    answer = result["summarizer_context"]["final_summary"]
-                elif result.get("is_complete") and result.get("messages"):
-                    # 检查最后一条消息是否是AI的回复
-                    last_msg = result["messages"][-1] if result["messages"] else None
-                    if last_msg and hasattr(last_msg, 'type') and last_msg.type == 'ai':
-                        answer = last_msg.content
-                
-                # 保存AI回答到数据库
+        try:
+            status_placeholder = st.empty()
+            status_placeholder.info("🤖 Multi-Agents正在协作规划您的旅行...")
+            
+            content_placeholder = st.empty()
+            full_content = ""
+            result_container = []
+            
+            for chunk in create_streaming_generator(user_query, st.session_state.multi_agents_state, result_container):
+                full_content += chunk
+                content_placeholder.markdown(full_content)
+            
+            status_placeholder.empty()
+            
+            if full_content:
                 chat_manager.add_message(
                     session_id=st.session_state.current_session_id,
                     message_type="ai",
-                    content=answer
+                    content=full_content
                 )
                 
-                # 添加助手消息
-                st.session_state.messages.append({"role": "assistant", "content": answer})
+                st.session_state.messages.append({"role": "assistant", "content": full_content})
                 
-                # 显示回答
-                st.markdown(answer)
-                
-                # 显示地图（如果有）
                 map_html = None
-                if result.get("summarizer_context"):
-                    map_html = result["summarizer_context"].get("map_html")
-                
-                print(f"🔍 [app.py 调试] 是否有 map_html: {'是' if map_html else '否'}")
-                if map_html:
-                    print(f"🔍 [app.py 调试] map_html 长度: {len(map_html)}")
+                if result_container:
+                    result = result_container[0]
+                    if result and result.get("summarizer_context"):
+                        map_html = result["summarizer_context"].get("map_html")
                 
                 if map_html:
                     try:
@@ -540,21 +622,20 @@ if user_query := st.chat_input(placeholder="请输入您的旅行需求，例如
                     except Exception as map_err:
                         st.warning(f"地图显示失败: {map_err}")
                         print(f"🔍 [app.py 调试] 地图显示错误: {map_err}")
-                
-            except Exception as e:
-                import traceback
-                traceback.print_exc()
-                error_msg = f"抱歉，Multi-Agents处理您的请求时出现错误：{str(e)}"
-                st.error(error_msg)
-                
-                # 保存错误消息到数据库
-                chat_manager.add_message(
-                    session_id=st.session_state.current_session_id,
-                    message_type="ai",
-                    content=error_msg
-                )
-                
-                st.session_state.messages.append({"role": "assistant", "content": error_msg})
+            
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            error_msg = f"抱歉，Multi-Agents处理您的请求时出现错误：{str(e)}"
+            st.error(error_msg)
+            
+            chat_manager.add_message(
+                session_id=st.session_state.current_session_id,
+                message_type="ai",
+                content=error_msg
+            )
+            
+            st.session_state.messages.append({"role": "assistant", "content": error_msg})
 
 # 侧边栏 - 显示当前配置
 with st.sidebar:

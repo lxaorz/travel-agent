@@ -31,6 +31,10 @@ QWEN3_TEMPERATURE = 0.7
 R1_MODEL = "deepseek-reasoner"
 R1_TEMPERATURE = 0.1
 
+# 流式输出配置
+STREAMING_ENABLED = True
+STREAM_CHUNK_SIZE = 1  # 每次输出的token数量
+
 # Embedding模型 - 使用与原始项目相同的模型
 EMBEDDING_MODEL = "text-embedding-v3"
 

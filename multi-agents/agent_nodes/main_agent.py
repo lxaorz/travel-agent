@@ -1,12 +1,13 @@
 """
 Main Agent - 协调者，负责路由和控制流程
 支持从 Feedback 返回后的决策
+支持流式输出
 """
-from typing import Dict, Any
+from typing import Dict, Any, AsyncGenerator
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
-from config.settings import QWEN3_MODEL, QWEN3_API_BASE, DASHSCOPE_API_KEY, QWEN3_TEMPERATURE
+from config.settings import QWEN3_MODEL, QWEN3_API_BASE, DASHSCOPE_API_KEY, QWEN3_TEMPERATURE, STREAMING_ENABLED
 from graph.state import GlobalState
 from user_profile_manager import get_profile_manager
 
@@ -249,3 +250,42 @@ async def main_agent_node(state: GlobalState) -> Dict[str, Any]:
         "current_agent": "main",
         "next_agent": "planner"
     }
+
+
+async def stream_main_response(state: GlobalState) -> AsyncGenerator[str, None]:
+    """
+    流式生成Main Agent的回答（对话类查询）
+    """
+    messages = state.get("messages") or []
+    user_query = state.get("user_query", "") or ""
+    
+    conversation_history = format_messages(messages)
+    
+    llm = ChatOpenAI(
+        model=QWEN3_MODEL,
+        base_url=QWEN3_API_BASE,
+        api_key=DASHSCOPE_API_KEY,
+        temperature=QWEN3_TEMPERATURE,
+        streaming=True
+    )
+    
+    conversation_prompt = ChatPromptTemplate.from_messages([
+        ("system", """你是一个友好的旅游助手。请根据对话历史给出恰当的回应。
+
+可用信息：
+- 用户当前查询：{user_query}
+
+请直接给出回应，不要使用任何格式标记。"""),
+        ("human", """对话历史：
+{conversation_history}
+
+请回应：""")
+    ])
+    
+    chain = conversation_prompt | llm
+    async for chunk in chain.astream({
+        "user_query": user_query,
+        "conversation_history": conversation_history
+    }):
+        if hasattr(chunk, 'content'):
+            yield chunk.content
