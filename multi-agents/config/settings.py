@@ -52,3 +52,12 @@ MCP_CONFIG_PATH = str(PROJECT_ROOT / "config" / "servers_config.json")
 BAIDU_AK = os.getenv("BAIDU_AK", "")
 BAIDU_GEO_URL = "https://api.map.baidu.com/geocoding/v3/"
 BAIDU_TRANSIT_URL = "https://api.map.baidu.com/direction/v2/transit"
+BAIDU_WEATHER_URL = "https://api.map.baidu.com/weather/v1/"
+
+# 高德地图API配置
+AMAP_KEY = os.getenv("AMAP_KEY", "")
+AMAP_WEATHER_URL = "https://restapi.amap.com/v3/weather/weatherInfo"
+
+# 心知天气API配置
+SENSEVERSE_KEY = os.getenv("SENSEVERSE_KEY", "")
+SENSEVERSE_WEATHER_URL = "https://api.seniverse.com/v3/weather/daily.json"

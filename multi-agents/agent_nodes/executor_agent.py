@@ -34,6 +34,41 @@ def bd09_to_wgs84(lng, lat):
     return (wgs_lng, wgs_lat)
 
 
+def _weather_code_to_text(code: int) -> str:
+    """将WMO天气代码转换为文字描述"""
+    weather_map = {
+        0: "晴",
+        1: "晴间多云",
+        2: "多云",
+        3: "阴",
+        45: "雾",
+        48: "雾凇",
+        51: "小毛毛雨",
+        53: "中毛毛雨",
+        55: "大毛毛雨",
+        56: "冻毛毛雨",
+        57: "强冻毛毛雨",
+        61: "小雨",
+        63: "中雨",
+        65: "大雨",
+        66: "冻雨",
+        67: "强冻雨",
+        71: "小雪",
+        73: "中雪",
+        75: "大雪",
+        77: "雪粒",
+        80: "小阵雨",
+        81: "中阵雨",
+        82: "大阵雨",
+        85: "小阵雪",
+        86: "大阵雪",
+        95: "雷暴",
+        96: "雷暴+小冰雹",
+        99: "雷暴+大冰雹"
+    }
+    return weather_map.get(code, f"未知({code})")
+
+
 
 
 async def execute_tool(tool_name: str, params: Dict, manager, 
@@ -46,7 +81,69 @@ async def execute_tool(tool_name: str, params: Dict, manager,
         
         elif tool_name == "gaode_weather":
             city = params.get("city", destination)
-            return "天气预报功能暂时不可用（高德MCP服务器已禁用）。请在.env文件中配置百度地图API密钥（BAIDU_AK）以使用此功能。"
+            date = params.get("date", travel_date)
+            
+            from config.settings import SENSEVERSE_KEY, SENSEVERSE_WEATHER_URL
+            import requests
+            
+            if SENSEVERSE_KEY and SENSEVERSE_KEY != "your_senseverse_key_here":
+                try:
+                    # 处理城市名：去掉"市"、"省"等后缀
+                    city_clean = city.replace("市", "").replace("省", "").strip()
+                    
+                    weather_params = {
+                        "key": SENSEVERSE_KEY,
+                        "location": city_clean,
+                        "language": "zh-Hans",
+                        "unit": "c",
+                        "start": 0,
+                        "days": 5
+                    }
+                    
+                    print(f"🔍 [gaode_weather] 调用心知天气API: city={city_clean}")
+                    print(f"🔍 [gaode_weather] API URL: {SENSEVERSE_WEATHER_URL}")
+                    print(f"🔍 [gaode_weather] API params: {weather_params}")
+                    
+                    weather_response = requests.get(SENSEVERSE_WEATHER_URL, params=weather_params, timeout=30)
+                    print(f"🔍 [gaode_weather] HTTP status: {weather_response.status_code}")
+                    weather_result = weather_response.json()
+                    print(f"🔍 [gaode_weather] API response: {weather_result}")
+                    
+                    if weather_result.get("results"):
+                        results = weather_result.get("results", [])
+                        if results:
+                            result = results[0]
+                            location_info = result.get("location", {})
+                            output = f"📍 {location_info.get('name', city)} 天气预报：\n"
+                            output += f"  地区：{location_info.get('country', '')} {location_info.get('path', '')}\n\n"
+                            
+                            daily_forecasts = result.get("daily", [])
+                            for forecast in daily_forecasts:
+                                date_str = forecast.get("date", "")
+                                from datetime import datetime
+                                date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+                                week_day = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"][date_obj.weekday()]
+                                
+                                output += f"📅 {date_str} ({week_day})\n"
+                                output += f"  🌡️ 温度：{forecast.get('low', '未知')}°C ~ {forecast.get('high', '未知')}°C\n"
+                                output += f"  ☁️ 天气：{forecast.get('text_day', '未知')}\n"
+                                output += f"  🌬️ 风向：{forecast.get('wind_direction', '未知')} {forecast.get('wind_scale', '未知')}级\n\n"
+                            
+                            print(f"✅ [gaode_weather] 成功获取天气数据")
+                            return output
+                    else:
+                        error_msg = f"天气查询失败: status={weather_result.get('status', '')}, message={weather_result.get('message', '未知错误')}"
+                        print(f"❌ [gaode_weather] {error_msg}")
+                        return error_msg
+                        
+                except Exception as e:
+                    error_msg = f"心知天气API调用失败: {str(e)}"
+                    print(f"❌ [gaode_weather] {error_msg}")
+                    import traceback
+                    traceback.print_exc()
+                    return error_msg
+            
+            return "天气查询功能暂时不可用。请在.env文件中配置心知天气API密钥（SENSEVERSE_KEY）以使用此功能。"
         
         elif tool_name == "gaode_geo":
             address = params.get("address", "")
